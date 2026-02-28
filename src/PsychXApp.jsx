@@ -24,11 +24,13 @@ class ErrorBoundary extends Component {
 // ─── Storage ───────────────────────────────────────────────────────────────
 const STORAGE_KEY = "psychx_patients_v2";
 async function loadPatients() {
-  try { const r = await window.storage.get(STORAGE_KEY); return r ? JSON.parse(r.value) : []; }
-  catch { return []; }
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch { return []; }
 }
 async function savePatients(patients) {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(patients)); } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(patients)); } catch {}
 }
 
 // ─── Constants ─────────────────────────────────────────────────────────────
