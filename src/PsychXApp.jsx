@@ -17,7 +17,7 @@ class ErrorBoundary extends Component {
 }
 
 // ── Storage ────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "psychx_patients_v6";
+const STORAGE_KEY = "psychx_patients_v7";
 const SETTINGS_KEY = "psychx_settings_v1";
 const SCHEDULE_KEY = "psychx_schedule_v1";
 
@@ -46,8 +46,11 @@ function migratePatient(p) {
 
 async function loadPatients() {
   try {
-    const v6 = localStorage.getItem(STORAGE_KEY);
-    if (v6) return JSON.parse(v6).map(migratePatient);
+    const v7 = localStorage.getItem(STORAGE_KEY);
+    if (v7) return JSON.parse(v7).map(migratePatient);
+    // Try migrating from v6
+    const v6 = localStorage.getItem("psychx_patients_v6");
+    if (v6) { const m = JSON.parse(v6).map(migratePatient); localStorage.setItem(STORAGE_KEY, JSON.stringify(m)); return m; }
     // Try migrating from v5
     const v5 = localStorage.getItem("psychx_patients_v5");
     if (v5) { const m = JSON.parse(v5).map(migratePatient); localStorage.setItem(STORAGE_KEY, JSON.stringify(m)); return m; }
@@ -560,17 +563,151 @@ function ImageCapture({ label, value, onChange }) {
     </div>
   );
 }
-function EnrollBtn({ label, url, icon, sub }) {
+function EnrollBtn({ label, url, icon, sub, variant = "primary" }) {
+  const bg = variant === "green" ? `linear-gradient(135deg,${C.green},#047857)` : `linear-gradient(135deg,${C.teal},${C.tealDark})`;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer"
-      style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: `linear-gradient(135deg,${C.teal},${C.tealDark})`, color: "#fff", borderRadius: 9, textDecoration: "none", fontWeight: 600, fontSize: 13 }}>
+      style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: bg, color: "#fff", borderRadius: 9, textDecoration: "none", fontWeight: 600, fontSize: 13 }}>
       <span style={{ fontSize: 17 }}>{icon}</span>
       <div><div style={{ fontWeight: 700 }}>{label}</div><div style={{ fontSize: 10, opacity: 0.8, marginTop: 1 }}>{sub || "Opens in new tab →"}</div></div>
     </a>
   );
 }
 
-// ── PHQ-9 Components ───────────────────────────────────────────────────────
+// ── Patient Readiness Checklist ────────────────────────────────────────────
+function PatientReadinessChecklist({ patient, onNavigateTab }) {
+  const activePA = (patient.paRecords || []).find(r => r.status === "Approved");
+  const hasSessions = (patient.sessions || []).length > 0;
+  const isCommercial = patient.planType === "commercial";
+
+  const steps = [
+    {
+      id: "rems",
+      label: "REMS Enrollment",
+      desc: "Patient enrolled in SPRAVATO® REMS — required before first treatment",
+      done: patient.remsEnrolled && patient.remsHcpSigned && patient.remsPatientSigned,
+      partial: patient.remsHcpSigned || patient.remsPatientSigned || patient.remsEnrolled,
+      urgent: true,
+      tab: "enrollment",
+      detail: patient.remsEnrolled
+        ? `Enrolled ${patient.remsEnrollmentDate || ""}${patient.remsPatientId ? " · ID: " + patient.remsPatientId : ""}`
+        : !patient.remsHcpSigned && !patient.remsPatientSigned
+          ? "Both HCP and patient forms required at SpravatoREMS.com"
+          : !patient.remsHcpSigned ? "HCP signature pending" : "Patient signature pending",
+    },
+    {
+      id: "withme",
+      label: "Spravato withMe™",
+      desc: isCommercial
+        ? "Copay savings + observation rebate — commercial patients eligible"
+        : "Not applicable — withMe savings for commercial insurance only",
+      done: patient.withMeEnrolled,
+      partial: false,
+      urgent: false,
+      skip: !isCommercial,
+      tab: "enrollment",
+      detail: patient.withMeEnrolled
+        ? `Enrolled ${patient.withMeEnrollmentDate || ""}`
+        : isCommercial
+          ? "Enroll at SpravatoHCP.com or call 1-844-479-4846"
+          : `${patient.planType || "Non-commercial"} plan — savings program not applicable`,
+    },
+    {
+      id: "pa",
+      label: "Prior Authorization",
+      desc: "Insurance approval required before dispensing Spravato",
+      done: !!activePA,
+      partial: (patient.paRecords || []).some(r => r.status === "Pending" || r.status === "Under Appeal"),
+      urgent: true,
+      tab: "pa",
+      detail: activePA
+        ? `${activePA.payer} · Auth #${activePA.authNumber || "pending"} · Expires ${activePA.expirationDate || "TBD"}`
+        : (patient.paRecords || []).find(r => r.status === "Pending")
+          ? `Pending with ${(patient.paRecords || []).find(r => r.status === "Pending")?.payer || "payer"}`
+          : "No PA submitted yet — submit PA after REMS enrollment",
+    },
+    {
+      id: "schedule",
+      label: "Schedule First Session",
+      desc: "Book Chair 1 or 2 for first Spravato administration",
+      done: hasSessions || (patient.scheduledSessions || []).length > 0,
+      partial: (patient.scheduledSessions || []).length > 0 && !hasSessions,
+      urgent: false,
+      tab: "sessions",
+      detail: hasSessions
+        ? `${(patient.sessions || []).length} session(s) logged`
+        : (patient.scheduledSessions || []).length > 0
+          ? "Appointment scheduled — ready to begin"
+          : "Schedule after PA approval",
+    },
+  ];
+
+  const completedCount = steps.filter(s => s.done || s.skip).length;
+  const totalRequired = steps.filter(s => !s.skip).length;
+  const allReady = steps.filter(s => !s.skip).every(s => s.done);
+  const pct = Math.round((steps.filter(s => s.done || s.skip).length / steps.length) * 100);
+
+  return (
+    <div style={{ ...S.card, border: allReady ? `2px solid ${C.green}` : `2px solid ${C.teal}30`, background: allReady ? C.greenLight : "#fff" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: allReady ? C.green : C.gray900, marginBottom: 2 }}>
+            {allReady ? "✅ Patient Ready for Treatment" : "📋 Patient Readiness Checklist"}
+          </div>
+          <div style={{ fontSize: 12, color: C.gray500 }}>
+            {completedCount} of {totalRequired} required steps complete
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: allReady ? C.green : C.teal }}>{pct}%</div>
+          <div style={{ width: 80, height: 5, background: C.gray200, borderRadius: 4, marginTop: 3 }}>
+            <div style={{ height: 5, borderRadius: 4, background: allReady ? C.green : C.teal, width: `${pct}%`, transition: "width 0.4s" }} />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {steps.map((step, idx) => {
+          const statusColor = step.skip ? C.gray400 : step.done ? C.green : step.partial ? C.amber : step.urgent ? C.red : C.gray400;
+          const statusBg = step.skip ? C.gray50 : step.done ? C.greenLight : step.partial ? C.amberLight : step.urgent ? "#fff8f8" : C.gray50;
+          const icon = step.skip ? "○" : step.done ? "✓" : step.partial ? "◑" : "○";
+
+          return (
+            <div key={step.id} style={{ display: "flex", gap: 12, padding: "10px 12px", background: statusBg, borderRadius: 10, border: `1.5px solid ${step.done ? C.green + "40" : step.partial ? C.amber + "40" : step.urgent && !step.done && !step.skip ? C.red + "20" : C.gray200}`, alignItems: "flex-start" }}>
+              {/* Step number / status */}
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: step.skip ? C.gray100 : step.done ? C.green : step.partial ? C.amber : C.gray200, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                <span style={{ color: step.done || step.partial ? "#fff" : C.gray500, fontWeight: 800, fontSize: 13 }}>{step.done ? "✓" : step.skip ? "–" : idx + 1}</span>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: step.skip ? C.gray400 : C.gray900 }}>{step.label}</div>
+                  {step.skip && <span style={S.badge("")}>N/A</span>}
+                  {step.done && !step.skip && <span style={S.badge("green")}>Complete</span>}
+                  {step.partial && !step.done && <span style={S.badge("amber")}>In Progress</span>}
+                  {!step.done && !step.partial && !step.skip && step.urgent && <span style={S.badge("red")}>Required</span>}
+                  {!step.done && !step.partial && !step.skip && !step.urgent && <span style={S.badge("")}>Pending</span>}
+                </div>
+                <div style={{ fontSize: 11, color: step.skip ? C.gray400 : C.gray500, marginBottom: 3 }}>{step.desc}</div>
+                <div style={{ fontSize: 11, color: step.done ? C.green : step.partial ? "#92400e" : C.gray500, fontStyle: step.done ? "normal" : "italic" }}>{step.detail}</div>
+              </div>
+              {!step.done && !step.skip && onNavigateTab && (
+                <button onClick={() => onNavigateTab(step.tab)} style={{ ...S.btn(step.urgent ? "primary" : "ghost"), padding: "5px 12px", fontSize: 11, flexShrink: 0 }}>
+                  {step.partial ? "Continue →" : "Start →"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {allReady && (
+        <div style={{ marginTop: 12, padding: "10px 14px", background: C.green + "15", borderRadius: 9, border: `1px solid ${C.green}30`, fontSize: 12, color: "#065f46", fontWeight: 600 }}>
+          🎉 All pre-treatment requirements met. Patient is cleared for Spravato administration.
+        </div>
+      )}
+    </div>
+  );
+}
 function PHQ9Form({ assessment, onChange }) {
   const { answers, date } = assessment;
   const score = answers.every(v => v !== null) ? answers.reduce((s, v) => s + v, 0) : null;
@@ -1246,7 +1383,7 @@ table.svc th { background: #e8e8e8; border: 1px solid #000; padding: 3px 4px; fo
     </div>
   </div>
 </div>
-<div style="margin-top:8px;font-size:8px;color:#94a3b8;text-align:center">Generated by PsychX v0.6 · ${new Date().toLocaleString()} · Review all fields before submission</div>
+<div style="margin-top:8px;font-size:8px;color:#94a3b8;text-align:center">Generated by PsychX v0.7 · ${new Date().toLocaleString()} · Review all fields before submission</div>
 </div>
 </body></html>`;
 }
@@ -1740,6 +1877,39 @@ function PracticeSettings({ settings, onSave }) {
         💡 <strong>Tip:</strong> POS 11 (Office) is locked for all Spravato sessions — Spravato cannot be administered via telehealth under REMS requirements. Telepsych E&M must be billed separately.
       </div>
 
+      {/* Practice REMS Enrollment — belongs here, not on patient records */}
+      <div style={{ ...S.card, border: `2px solid ${C.teal}30` }}>
+        <div style={S.secTitle}>REMS Practice Enrollment (One-Time Setup)</div>
+        <div style={{ fontSize: 13, color: C.gray500, marginBottom: 14 }}>
+          Your practice/outpatient healthcare setting must be enrolled in SPRAVATO® REMS before treating any patients. This is a one-time action — not per-patient. The Authorized Representative of your practice certifies REMS compliance for all staff.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+          <EnrollBtn
+            label="Enroll Practice / HCP"
+            url="https://www.spravatorems.com"
+            icon="🏥"
+            sub="SpravatoREMS.com — one-time setup"
+          />
+          <EnrollBtn
+            label="HCP Prescriber Enrollment"
+            url="https://www.spravatorems.com"
+            icon="👨‍⚕️"
+            sub="For prescribing physicians / NPs"
+            variant="green"
+          />
+          <EnrollBtn
+            label="REMS Program Overview"
+            url="https://www.spravatorems.com"
+            icon="📋"
+            sub="Requirements & compliance guide"
+            variant="green"
+          />
+        </div>
+        <div style={{ padding: "8px 12px", background: C.gray50, borderRadius: 8, fontSize: 11, color: C.gray500 }}>
+          REMS Compliance Hotline: <strong style={{ color: C.teal }}>1-855-382-6022</strong> · Available 24/7 for adverse events and compliance questions
+        </div>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <button onClick={save} style={S.btn("success")}>✓ Save Practice Settings</button>
       </div>
@@ -1924,50 +2094,111 @@ function EnrollmentPanel({ patient, onUpdate, addAudit }) {
     if (f === "withMeEnrolled" && v) addAudit(updated, "withMe enrollment confirmed");
     onUpdate(updated);
   };
+  const isCommercial = patient.planType === "commercial";
+
   return (
     <div>
-      <div style={S.secTitle}>REMS & withMe Enrollment</div>
-      <div style={{ ...S.card, border: `2px solid ${patient.remsEnrolled ? C.green : C.gray200}` }}>
+      <div style={{ ...S.card, padding: "12px 16px", background: C.tealLight, border: `1px solid #bae6fd`, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.teal, marginBottom: 6 }}>📋 Enrollment Sequence</div>
+        <div style={{ fontSize: 12, color: "#0369a1", lineHeight: 1.7 }}>
+          <strong>Step 1:</strong> Enroll patient in SPRAVATO® REMS (mandatory — blocks treatment if missing)<br />
+          <strong>Step 2:</strong> Enroll in Spravato withMe™ (commercial patients only — copay + observation rebate support)<br />
+          <strong>Step 3:</strong> Submit Prior Authorization → go to the <em>Prior Auth</em> tab
+        </div>
+      </div>
+
+      {/* REMS Enrollment */}
+      <div style={{ ...S.card, border: `2px solid ${patient.remsEnrolled ? C.green : patient.remsHcpSigned || patient.remsPatientSigned ? C.amber : C.gray200}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>SPRAVATO® REMS</div>
-            <div style={{ fontSize: 12, color: C.gray500 }}>Both HCP and patient must sign before first treatment.</div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>SPRAVATO® REMS Patient Enrollment</div>
+            <div style={{ fontSize: 12, color: C.gray500, marginTop: 2 }}>FDA-mandated. Both HCP and patient must sign before first treatment. Submit at SpravatoREMS.com.</div>
           </div>
-          {patient.remsEnrolled ? <span style={S.badge("green")}>✓ Enrolled</span> : <span style={S.badge("amber")}>Pending</span>}
+          {patient.remsEnrolled
+            ? <span style={S.badge("green")}>✓ Enrolled</span>
+            : patient.remsHcpSigned || patient.remsPatientSigned
+              ? <span style={S.badge("amber")}>In Progress</span>
+              : <span style={S.badge("red")}>Required</span>}
         </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <Field label="Enrollment Date"><Input type="date" value={patient.remsEnrollmentDate} onChange={v => upd("remsEnrollmentDate", v)} /></Field>
           <Field label="REMS Patient ID"><Input value={patient.remsPatientId} onChange={v => upd("remsPatientId", v)} placeholder="REMS Patient ID #" /></Field>
         </div>
         <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
-          <Checkbox checked={patient.remsHcpSigned} onChange={v => upd("remsHcpSigned", v)} label="HCP signed enrollment form" />
-          <Checkbox checked={patient.remsPatientSigned} onChange={v => upd("remsPatientSigned", v)} label="Patient signed enrollment form" />
-          <Checkbox checked={patient.remsEnrolled} onChange={v => upd("remsEnrolled", v)} label="Enrollment confirmed at SpravatoREMS.com" />
+          <Checkbox checked={patient.remsHcpSigned} onChange={v => upd("remsHcpSigned", v)} label="HCP signed Patient Enrollment Form (prescriber section)" />
+          <Checkbox checked={patient.remsPatientSigned} onChange={v => upd("remsPatientSigned", v)} label="Patient signed Patient Enrollment Form (patient section)" />
+          <Checkbox checked={patient.remsEnrolled} onChange={v => upd("remsEnrolled", v)} label="Enrollment submitted and confirmed at SpravatoREMS.com" />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          <EnrollBtn label="Patient Enrollment" url="https://www.spravatorems.com/enrollment/patient" icon="🏥" sub="SpravatoREMS.com" />
-          <EnrollBtn label="HCP Enrollment" url="https://www.spravatorems.com/enrollment/hcp" icon="👨‍⚕️" sub="SpravatoREMS.com" />
-          <EnrollBtn label="Submit Monitoring Form" url="https://www.spravatorems.com/monitoring" icon="📋" sub="Within 7 days of session" />
+
+        {/* Patient-level enrollment links only */}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.gray500, textTransform: "uppercase", marginBottom: 8 }}>Patient Enrollment Actions</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <EnrollBtn label="Enroll Patient (Online)" url="https://www.spravatorems.com" icon="🏥" sub="SpravatoREMS.com — complete patient form" />
+            <EnrollBtn label="Submit Monitoring Form" url="https://www.spravatorems.com" icon="📋" sub="Submit within 7 days of each session" variant="green" />
+          </div>
+        </div>
+        <div style={{ padding: "8px 12px", background: C.amberLight, borderRadius: 8, fontSize: 11, color: "#92400e" }}>
+          💡 <strong>Practice/HCP REMS enrollment</strong> is a one-time setup done in Practice Settings — not per patient.
         </div>
       </div>
+
+      {/* withMe Enrollment */}
       <div style={{ ...S.card, border: `2px solid ${patient.withMeEnrolled ? C.green : C.gray200}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Spravato withMe™</div>
-            <div style={{ fontSize: 12, color: C.gray500 }}>PA support, copay assistance (commercial only), benefits investigation, transportation.</div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Spravato withMe™ Patient Support</div>
+            <div style={{ fontSize: 12, color: C.gray500, marginTop: 2 }}>
+              Copay/coinsurance savings on medication + $0 observation rebate per session. <strong>Commercial insurance only.</strong>
+            </div>
           </div>
-          {patient.withMeEnrolled ? <span style={S.badge("green")}>✓ Enrolled</span> : <span style={S.badge("amber")}>Pending</span>}
+          {patient.withMeEnrolled
+            ? <span style={S.badge("green")}>✓ Enrolled</span>
+            : isCommercial
+              ? <span style={S.badge("amber")}>Recommended</span>
+              : <span style={S.badge("")}>N/A</span>}
         </div>
-        {patient.planType !== "commercial" && <div style={{ padding: "7px 10px", background: C.amberLight, borderRadius: 7, fontSize: 12, color: "#92400e", marginBottom: 10 }}>⚠ Copay savings for commercial patients only.</div>}
-        <Field label="withMe Enrollment Date"><Input type="date" value={patient.withMeEnrollmentDate} onChange={v => upd("withMeEnrollmentDate", v)} /></Field>
-        <Checkbox checked={patient.withMeEnrolled} onChange={v => upd("withMeEnrolled", v)} label="Enrolled in withMe program" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-          <EnrollBtn label="withMe Patient Enrollment" url="https://www.janssenprescriptionassistance.com/patient-assistance-program/spravato" icon="💊" sub="Janssen assistance portal" />
-          <EnrollBtn label="HCP withMe Form" url="https://www.spravatohcp.com/spravato-with-me/enroll" icon="📝" sub="SpravatoHCP.com" />
+
+        {!isCommercial ? (
+          <div style={{ padding: "10px 14px", background: C.amberLight, borderRadius: 9, fontSize: 12, color: "#92400e", marginBottom: 12 }}>
+            ⚠ <strong>{patient.planType || "Non-commercial"} plan detected.</strong> Spravato withMe savings and observation rebate programs are for commercial/private insurance only. Medicare, Medicaid, TRICARE, and VA patients are not eligible.
+          </div>
+        ) : (
+          <div style={{ padding: "10px 14px", background: C.greenLight, borderRadius: 9, fontSize: 12, color: "#065f46", marginBottom: 12 }}>
+            ✓ Commercial plan — patient is eligible for withMe Savings Program (drug copay) and Observation Rebate Program ($0 per session after rebate).
+            <div style={{ marginTop: 4, fontSize: 11, color: C.gray500 }}>Note: Not valid for residents of MA, MN, or RI. SaveOnSP participants may not qualify.</div>
+          </div>
+        )}
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+          <Field label="withMe Enrollment Date"><Input type="date" value={patient.withMeEnrollmentDate} onChange={v => upd("withMeEnrollmentDate", v)} /></Field>
+          <Checkbox checked={patient.withMeEnrolled} onChange={v => upd("withMeEnrolled", v)} label="Patient enrolled in Spravato withMe™ program" />
         </div>
-        <div style={{ marginTop: 10, padding: "10px 14px", background: C.gray50, borderRadius: 8, border: `1px solid ${C.gray200}` }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 3 }}>withMe Support</div>
-          <div style={{ fontSize: 13, color: C.teal, fontWeight: 700 }}>📞 1-844-479-4846</div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.gray500, textTransform: "uppercase", marginBottom: 8 }}>Enrollment Actions</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <EnrollBtn
+              label="Patient Enrollment Form"
+              url="https://www.spravato.com/patient-support-program/"
+              icon="💊"
+              sub="Spravato.com — patient cost support"
+            />
+            <EnrollBtn
+              label="Provider withMe Portal"
+              url="https://www.spravatoproviderportal.com"
+              icon="📝"
+              sub="SpravotoProviderPortal.com"
+              variant="green"
+            />
+          </div>
+        </div>
+
+        <div style={{ padding: "10px 14px", background: C.gray50, borderRadius: 8, border: `1px solid ${C.gray200}` }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 3 }}>withMe Care Navigator</div>
+          <div style={{ fontSize: 13, color: C.teal, fontWeight: 700 }}>📞 1-844-479-4846 (1-844-4S-WITHME)</div>
+          <div style={{ fontSize: 11, color: C.gray500, marginTop: 2 }}>Hours: Mon–Fri 8am–8pm ET</div>
         </div>
       </div>
     </div>
@@ -2072,7 +2303,7 @@ function printHTML(html) {
 }
 const PS = `<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Helvetica Neue',Arial,sans-serif;font-size:11px;color:#1a2332;padding:24px 28px}h1{font-size:17px;font-weight:800}h2{font-size:11px;font-weight:700;color:#1a7fa8;text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;padding-bottom:3px;border-bottom:2px solid #e2e8f0}table{width:100%;border-collapse:collapse;margin-bottom:8px}td,th{padding:5px 8px;border:1px solid #e2e8f0;font-size:11px;vertical-align:top}th{background:#f1f5f9;font-weight:700;color:#475569;text-transform:uppercase;font-size:10px}.lc{width:160px;font-weight:600;color:#475569;background:#f8fafc}.hdr{display:flex;justify-content:space-between;margin-bottom:16px;padding-bottom:10px;border-bottom:3px solid #1a7fa8}.bg{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;background:#dcfce7;color:#166534}.br{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;background:#fee2e2;color:#991b1b}.ba{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;background:#fef3c7;color:#92400e}.bb{display:inline-block;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;background:#dbeafe;color:#1e40af}.ab{padding:6px 10px;border-radius:5px;margin:6px 0;font-size:11px}.ar{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}.aa{background:#fffbeb;border:1px solid #fde68a;color:#92400e}.ag{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}.sl{border-bottom:1px solid #334155;width:220px;height:28px;display:inline-block;margin-right:24px}.ftr{margin-top:20px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;display:flex;justify-content:space-between}@media print{body{padding:12px 16px}@page{margin:.4in;size:letter}}</style>`;
 const hdr = (title, p, sub = "") => `<div class="hdr"><div><div style="font-size:9px;color:#1a7fa8;font-weight:700;text-transform:uppercase;margin-bottom:2px">PsychX · Spravato Program</div><h1>${title}</h1>${sub ? `<div style="font-size:11px;color:#64748b;margin-top:2px">${sub}</div>` : ""}</div><div style="text-align:right"><div style="font-size:14px;font-weight:800">${p.firstName} ${p.lastName}</div><div style="font-size:11px;color:#64748b">DOB: ${p.dob || "—"} · MRN: ${p.psychxMRN || "—"}</div><div style="font-size:11px;color:#64748b">Generated: ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div></div></div>`;
-const ftr = (n = "") => `<div class="ftr"><div>PsychX v0.6${n ? " · " + n : ""}</div><div>${new Date().toLocaleString()}</div></div>`;
+const ftr = (n = "") => `<div class="ftr"><div>PsychX v0.7${n ? " · " + n : ""}</div><div>${new Date().toLocaleString()}</div></div>`;
 const row = (l, v) => `<tr><td class="lc">${l}</td><td>${v || "<span style='color:#cbd5e1'>—</span>"}</td></tr>`;
 
 function exportPatientSummary(patient) {
@@ -2582,6 +2813,8 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
       <ErrorBoundary>
         {tab === "overview" && (
           <div>
+            {/* Readiness Checklist — always at top of overview */}
+            <PatientReadinessChecklist patient={patient} onNavigateTab={setTab} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <div style={S.card}>
                 <div style={S.secTitle}>Demographics</div>
@@ -2707,8 +2940,9 @@ function Dashboard({ patients, schedule, onSelect, onAddNew }) {
   const [search, setSearch] = useState("");
   const total = patients.length;
   const remsAlert = patients.filter(p => (p.sessions || []).some(s => !s.remsFormSubmitted)).length;
-  const paUrgent = patients.filter(p => (p.paRecords || []).some(r => { const u = paUrgency(r); return u && u.color === "#dc2626"; })).length;
+  const paExpiring = patients.filter(p => (p.paRecords || []).some(r => { const u = paUrgency(r); return u && u.color === "#dc2626"; })).length;
   const noActivePA = patients.filter(p => !(p.paRecords || []).some(r => r.status === "Approved")).length;
+  const activePA = patients.filter(p => (p.paRecords || []).some(r => r.status === "Approved")).length;
 
   const today = new Date().toISOString().split("T")[0];
   const weekDates = getWeekDates(today);
@@ -2735,9 +2969,9 @@ function Dashboard({ patients, schedule, onSelect, onAddNew }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 20 }}>
         {[
           { label: "Total Patients", value: total, color: C.teal, icon: "👥" },
+          { label: "Active Authorizations", value: activePA, color: activePA === total && total > 0 ? C.green : activePA > 0 ? C.teal : C.amber, icon: "✅", urgent: false },
+          { label: "Auth Expiring / Expired", value: paExpiring, color: paExpiring > 0 ? C.red : C.green, icon: "⚠️", urgent: paExpiring > 0 },
           { label: "REMS Forms Due", value: remsAlert, color: remsAlert > 0 ? C.amber : C.green, icon: "📋", urgent: remsAlert > 0 },
-          { label: "Auth Expiring Soon", value: paUrgent, color: paUrgent > 0 ? C.red : C.green, icon: "⚠️", urgent: paUrgent > 0 },
-          { label: "No Active Auth", value: noActivePA, color: noActivePA > 0 ? C.amber : C.green, icon: "📄", urgent: noActivePA > 0 },
         ].map(s => (
           <div key={s.label} style={{ ...S.card, marginBottom: 0, border: s.urgent ? `2px solid ${s.color}` : `1px solid ${C.gray200}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -2775,7 +3009,7 @@ function Dashboard({ patients, schedule, onSelect, onAddNew }) {
       )}
 
       {/* Action items */}
-      {(remsAlert > 0 || paUrgent > 0) && (
+      {(remsAlert > 0 || paExpiring > 0) && (
         <div style={{ ...S.card, border: `2px solid ${C.red}`, background: "#fff8f8", marginBottom: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.red, marginBottom: 12 }}>🚨 Action Required</div>
           <div style={{ display: "grid", gap: 8 }}>
@@ -2792,8 +3026,7 @@ function Dashboard({ patients, schedule, onSelect, onAddNew }) {
               );
             })}
             {patients.filter(p => (p.paRecords || []).some(r => { const u = paUrgency(r); return u && u.color === "#dc2626"; })).map(p => {
-              const r = (p.paRecords || []).find(r => { const u = paUrgency(r); return u && u.color === "#dc2626"; });
-              return (
+              const r = (p.paRecords || []).find(r => { const u = paUrgency(r); return u && u.color === "#dc2626"; });              return (
                 <div key={p.id} onClick={() => onSelect(p)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#fff", borderRadius: 10, border: "1px solid #fecaca", cursor: "pointer" }}>
                   <span style={S.badge("red")}>Auth ⚠</span>
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{p.firstName} {p.lastName}</span>
@@ -2942,7 +3175,7 @@ export default function App() {
               <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>Spravato Program</div>
             </div>
           </div>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 8 }}>v0.6 · {patients.length} patient{patients.length !== 1 ? "s" : ""}</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 8 }}>v0.7 · {patients.length} patient{patients.length !== 1 ? "s" : ""}</div>
         </div>
         <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "0 16px" }} />
         <nav style={{ padding: "12px 10px", flex: 1 }}>
@@ -2967,7 +3200,8 @@ export default function App() {
           {[
             ["SpravatoREMS.com", "https://www.spravatorems.com"],
             ["SpravatoHCP.com", "https://www.spravatohcp.com"],
-            ["withMe Enrollment", "https://www.spravatohcp.com/spravato-with-me/enroll"],
+            ["withMe Provider Portal", "https://www.spravatoproviderportal.com"],
+            ["withMe Patient Enrollment", "https://www.spravato.com/patient-support-program/"],
             ["CoverMyMeds", "https://www.covermymeds.com"],
             ["REMS: 1-855-382-6022", "tel:18553826022"],
             ["withMe: 1-844-479-4846", "tel:18444794846"],
