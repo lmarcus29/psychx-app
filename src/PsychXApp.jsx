@@ -17,7 +17,7 @@ class ErrorBoundary extends Component {
 }
 
 // ── Storage ────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "psychx_patients_v71";
+const STORAGE_KEY = "psychx_patients_v74";
 const SETTINGS_KEY = "psychx_settings_v1";
 const SCHEDULE_KEY = "psychx_schedule_v1";
 
