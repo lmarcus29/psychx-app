@@ -1898,6 +1898,7 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
   return (
     <div>
       {apptDeleteConfirm && <ConfirmDeleteModal {...apptDeleteConfirm} onCancel={() => setApptDeleteConfirm(null)} />}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>Schedule</div>
           <div style={{ fontSize: 12, color: C.gray500 }}>{schedule.filter(a => !a.converted).length} upcoming appointments · 2 chairs</div>
