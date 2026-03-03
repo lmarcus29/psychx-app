@@ -1822,7 +1822,6 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
   const [editAppt, setEditAppt] = useState(null);
   const [draft, setDraft] = useState(null);
   const [view, setView] = useState("week"); // "week" | "list"
-  const [apptDeleteConfirm, setApptDeleteConfirm] = useState(null);
 
   const weekDates = getWeekDates(weekRef);
   const prevWeek = () => { const d = new Date(weekRef); d.setDate(d.getDate() - 7); setWeekRef(d.toISOString().split("T")[0]); };
@@ -1867,6 +1866,7 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
     onScheduleUpdate(updated); closeForm();
   };
 
+  const [apptDeleteConfirm, setApptDeleteConfirm] = useState(null);
 
   const deleteAppt = (id) => {
     const appt = schedule.find(a => a.id === id);
@@ -1898,7 +1898,6 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
   return (
     <div>
       {apptDeleteConfirm && <ConfirmDeleteModal {...apptDeleteConfirm} onCancel={() => setApptDeleteConfirm(null)} />}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>Schedule</div>
           <div style={{ fontSize: 12, color: C.gray500 }}>{schedule.filter(a => !a.converted).length} upcoming appointments · 2 chairs</div>
@@ -3039,6 +3038,7 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
   const psych = PSYCHX_PSYCHIATRISTS.find(d => d.id === patient.psychiatristId);
 
   const confirmDelete = (opts) => setDeleteConfirm({ ...opts, onConfirm: () => { opts.onConfirm(); setDeleteConfirm(null); } });
+  const tabs = [
     { id: "overview", label: "Overview" },
     { id: "sessions", label: `Sessions (${(patient.sessions || []).length})` },
     { id: "pa", label: `Prior Auth (${(patient.paRecords || []).length})` },
