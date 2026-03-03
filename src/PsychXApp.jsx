@@ -837,7 +837,7 @@ function PHQ9History({ patient, onUpdate, addAudit }) {
 }
 
 // ── Trial Editor ───────────────────────────────────────────────────────────
-function TrialEditor({ trials, onChange }) {
+function TrialEditor({ trials, onChange, showErrors = false }) {
   const classColor = { SSRI: C.green, SNRI: C.teal, NDRI: "#d97706", TCA: C.purple, MAOI: C.red, NaSSA: "#0891b2", SARI: "#7c3aed", SMS: C.teal, Augmentation: "#6b7280", Other: C.gray500 };
   const upd = (idx, field, value) => {
     const updated = trials.map((t, i) => {
@@ -845,8 +845,28 @@ function TrialEditor({ trials, onChange }) {
       const u = { ...t, [field]: value };
       if (field === "drug") u.drugClass = DRUG_CLASSES[value] || "";
       if (field === "startDate" || field === "endDate") {
-        const w = weeksFromDates(field === "startDate" ? value : t.startDate, field === "endDate" ? value : t.endDate);
-        if (w) u.durationWeeks = w;
+        const start = field === "startDate" ? value : t.startDate;
+        const end = field === "endDate" ? value : t.endDate;
+        const w = weeksFromDates(start, end);
+        if (w) {
+          // Map calculated weeks to nearest valid select option
+          const wNum = parseInt(w);
+          const validOpts = ["<4","4","5","6","7","8","9","10","11","12","16","20","24","26+"];
+          if (w === "<4") u.durationWeeks = "<4";
+          else if (wNum >= 26) u.durationWeeks = "26+";
+          else if (wNum >= 16 && wNum < 20) u.durationWeeks = "16";
+          else if (wNum >= 20 && wNum < 24) u.durationWeeks = "20";
+          else if (wNum >= 24 && wNum < 26) u.durationWeeks = "24";
+          else if (validOpts.includes(String(wNum))) u.durationWeeks = String(wNum);
+          else {
+            // Find nearest valid option
+            const nearest = validOpts.filter(o => !isNaN(o)).reduce((a, b) =>
+              Math.abs(parseInt(b) - wNum) < Math.abs(parseInt(a) - wNum) ? b : a
+            );
+            u.durationWeeks = nearest;
+          }
+          u.adequateTrial = wNum >= 6;
+        }
       }
       return u;
     });
@@ -877,7 +897,9 @@ function TrialEditor({ trials, onChange }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: 8 }}>
             <Field label="Medication" required={idx < 2}>
-              <Select value={trial.drug} onChange={v => upd(idx, "drug", v)} options={[{ value: "", label: "Select..." }, ...ANTIDEPRESSANTS.map(a => ({ value: a, label: a }))]} />
+              <Select value={trial.drug} onChange={v => upd(idx, "drug", v)}
+                options={[{ value: "", label: "Select..." }, ...ANTIDEPRESSANTS.map(a => ({ value: a, label: a }))]}
+                error={showErrors && idx < 2 && !trial.drug ? "Required" : null} />
             </Field>
             <Field label="Class (auto)">
               <div style={{ ...S.inp(false), background: C.gray50, color: trial.drugClass ? classColor[trial.drugClass] || C.gray700 : C.gray400, fontWeight: 600, fontSize: 12 }}>{trial.drugClass || "Auto-fills"}</div>
@@ -889,7 +911,8 @@ function TrialEditor({ trials, onChange }) {
             <Field label="End Date"><Input type="date" value={trial.endDate} onChange={v => upd(idx, "endDate", v)} /></Field>
             <Field label="Duration (wk)" required={idx < 2}>
               <Select value={trial.durationWeeks} onChange={v => upd(idx, "durationWeeks", v)}
-                options={[{ value: "", label: "Select..." }, ...["<4","4","5","6","7","8","9","10","11","12","16","20","24","26+"].map(w => ({ value: w, label: `${w} wk` }))]} />
+                options={[{ value: "", label: "Select..." }, ...["<4","4","5","6","7","8","9","10","11","12","16","20","24","26+"].map(w => ({ value: w, label: `${w} wk` }))]}
+                error={showErrors && idx < 2 && !trial.durationWeeks ? "Required" : null} />
             </Field>
             <Field label="Adequate Trial?">
               <Select value={trial.adequateTrial ? "yes" : "no"} onChange={v => upd(idx, "adequateTrial", v === "yes")}
@@ -898,7 +921,9 @@ function TrialEditor({ trials, onChange }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <Field label="Reason Discontinued" required={idx < 2}>
-              <Select value={trial.reason} onChange={v => upd(idx, "reason", v)} options={DISC_REASONS.map(r => ({ value: r, label: r || "Select..." }))} />
+              <Select value={trial.reason} onChange={v => upd(idx, "reason", v)}
+                options={DISC_REASONS.map(r => ({ value: r, label: r || "Select..." }))}
+                error={showErrors && idx < 2 && !trial.reason ? "Required" : null} />
             </Field>
             <Field label="Notes"><Input value={trial.notes} onChange={v => upd(idx, "notes", v)} placeholder="Pharmacy records, notes..." /></Field>
           </div>
@@ -1676,17 +1701,63 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
       </div>
 
       {/* Appointment Form */}
-      {showForm && draft && (
+      {showForm && draft && (() => {
+        const [ptSearch, setPtSearch] = useState("");
+        const selectedPt = patients.find(p => p.id === draft.patientId);
+        const filteredPts = ptSearch.trim()
+          ? patients.filter(p => `${p.lastName} ${p.firstName}`.toLowerCase().includes(ptSearch.toLowerCase()) || p.psychxMRN?.toLowerCase().includes(ptSearch.toLowerCase()))
+          : patients;
+        const ptSessions = selectedPt ? [...(selectedPt.sessions || [])].sort((a, b) => a.sessionNumber - b.sessionNumber) : [];
+
+        return (
         <div style={{ ...S.card, border: `2px solid ${C.teal}`, marginBottom: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.teal, marginBottom: 14 }}>{editAppt ? "Edit Appointment" : "Book New Appointment"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
               <FL label="Patient" required />
-              <select value={draft.patientId} onChange={e => { const p = patients.find(x => x.id === e.target.value); setDraft(d => ({ ...d, patientId: e.target.value, patientName: p ? `${p.firstName} ${p.lastName}` : "" })); }}
-                style={{ ...S.inp(false), appearance: "none" }}>
-                <option value="">Select patient...</option>
-                {patients.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} — {p.psychxMRN}</option>)}
-              </select>
+              <input
+                value={ptSearch || (selectedPt ? `${selectedPt.lastName}, ${selectedPt.firstName}` : "")}
+                onChange={e => { setPtSearch(e.target.value); if (!e.target.value) setDraft(d => ({ ...d, patientId: "", patientName: "" })); }}
+                placeholder="Type last name to search..."
+                style={{ ...S.inp(false), marginBottom: 4 }}
+              />
+              {ptSearch && (
+                <div style={{ border: `1px solid ${C.gray200}`, borderRadius: 8, background: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: 180, overflowY: "auto", zIndex: 10, position: "relative" }}>
+                  {filteredPts.length === 0
+                    ? <div style={{ padding: "10px 14px", fontSize: 12, color: C.gray400 }}>No patients match "{ptSearch}"</div>
+                    : filteredPts.map(p => (
+                      <div key={p.id} onClick={() => { setDraft(d => ({ ...d, patientId: p.id, patientName: `${p.firstName} ${p.lastName}` })); setPtSearch(""); }}
+                        style={{ padding: "9px 14px", cursor: "pointer", borderBottom: `1px solid ${C.gray100}`, fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = C.tealLight}
+                        onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                        <div style={{ fontWeight: 600 }}>{p.lastName}, {p.firstName}</div>
+                        <div style={{ fontSize: 11, color: C.gray400 }}>{p.psychxMRN} · {p.insurerName || "No insurer"} · {(p.sessions || []).length} sessions</div>
+                      </div>
+                    ))}
+                </div>
+              )}
+              {/* Session history below selected patient */}
+              {selectedPt && !ptSearch && (
+                <div style={{ marginTop: 8, padding: "10px 12px", background: C.tealLight, borderRadius: 9, border: `1px solid #bae6fd` }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.teal, textTransform: "uppercase", marginBottom: 6 }}>
+                    {selectedPt.firstName} {selectedPt.lastName} · Session History
+                  </div>
+                  {ptSessions.length === 0 ? (
+                    <div style={{ fontSize: 12, color: C.gray400 }}>No sessions logged yet</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {ptSessions.map(s => (
+                        <div key={s.id} style={{ padding: "3px 9px", background: "#fff", borderRadius: 20, border: `1px solid #bae6fd`, fontSize: 11, color: C.teal }}>
+                          <strong>#{s.sessionNumber}</strong> — {s.date} · {s.dose}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: C.gray500, marginTop: 6 }}>
+                    Next will be Session #{ptSessions.length + 1} · {sessionPhase(ptSessions.length + 1).label}
+                  </div>
+                </div>
+              )}
             </div>
             <div>
               <FL label="Date" required />
@@ -1738,7 +1809,8 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
             <button onClick={saveAppt} style={S.btn("success")}>✓ {editAppt ? "Update" : "Book"} Appointment</button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Week Calendar View */}
       {view === "week" && (
@@ -1932,12 +2004,21 @@ function PATracker({ patient, onUpdate, addAudit }) {
   const save = () => {
     if (!draft.payer?.trim()) { alert("Please enter a payer name."); return; }
     let updated;
+    const statusNote = (d) => {
+      if (d.status === "Approved") return `PA APPROVED — ${d.payer} · Auth #: ${d.authNumber || "pending"} · Valid: ${d.startDate || "—"} to ${d.expirationDate || "—"} · Benefit: ${d.benefitType}`;
+      if (d.status === "Denied") return `PA DENIED — ${d.payer} · Reason: ${d.denialReason || "not specified"}${d.notes ? " · Notes: " + d.notes : ""}`;
+      if (d.status === "Pending") return `PA SUBMITTED — ${d.payer} · Submitted: ${d.submittedDate} · Benefit: ${d.benefitType}${d.notes ? " · " + d.notes : ""}`;
+      if (d.status === "Under Appeal") return `PA APPEAL FILED — ${d.payer} · Appeal Date: ${d.appealDate || "—"}${d.appealNotes ? " · " + d.appealNotes : ""}`;
+      if (d.status === "Reauth Due") return `PA REAUTHORIZATION REQUIRED — ${d.payer} · Auth expiring: ${d.expirationDate || "—"}`;
+      if (d.status === "Expired") return `PA EXPIRED — ${d.payer} · Was Auth #: ${d.authNumber || "—"} · Expired: ${d.expirationDate || "—"}`;
+      return `PA updated — ${d.payer} — Status: ${d.status}`;
+    };
     if (editId) {
       updated = { ...patient, paRecords: patient.paRecords.map(r => r.id === editId ? draft : r) };
-      addAudit(updated, `PA updated — ${draft.payer} — Status: ${draft.status}`);
+      addAudit(updated, statusNote(draft));
     } else {
       updated = { ...patient, paRecords: [...(patient.paRecords || []), draft] };
-      addAudit(updated, `PA added — ${draft.payer} — Status: ${draft.status}`);
+      addAudit(updated, statusNote(draft));
     }
     onUpdate(updated); closeForm();
   };
@@ -1945,7 +2026,13 @@ function PATracker({ patient, onUpdate, addAudit }) {
   const quickStatus = (id, status) => {
     const rec = (patient.paRecords || []).find(r => r.id === id);
     const updated = { ...patient, paRecords: patient.paRecords.map(r => r.id === id ? { ...r, status } : r) };
-    addAudit(updated, `PA status → "${status}" — ${rec?.payer || ""}`);
+    const statusNote = () => {
+      if (status === "Approved") return `PA APPROVED — ${rec?.payer || ""} · Auth #: ${rec?.authNumber || "pending"} · Expires: ${rec?.expirationDate || "—"}`;
+      if (status === "Denied") return `PA DENIED — ${rec?.payer || ""}`;
+      if (status === "Reauth Due") return `PA REAUTHORIZATION FLAGGED — ${rec?.payer || ""} · Auth #: ${rec?.authNumber || "—"} expiring ${rec?.expirationDate || "—"}`;
+      return `PA status → "${status}" — ${rec?.payer || ""}`;
+    };
+    addAudit(updated, statusNote());
     onUpdate(updated);
   };
 
@@ -2090,8 +2177,11 @@ function ShipmentLog({ patient, onUpdate, addAudit }) {
 function EnrollmentPanel({ patient, onUpdate, addAudit }) {
   const upd = (f, v) => {
     const updated = { ...patient, [f]: v };
-    if (f === "remsEnrolled" && v) addAudit(updated, "REMS enrollment confirmed");
-    if (f === "withMeEnrolled" && v) addAudit(updated, "withMe enrollment confirmed");
+    if (f === "remsEnrolled" && v) addAudit(updated, `REMS Patient Enrollment confirmed at SpravatoREMS.com — Enrollment Date: ${updated.remsEnrollmentDate || "not recorded"}${updated.remsPatientId ? " · REMS Patient ID: " + updated.remsPatientId : ""}`);
+    if (f === "remsHcpSigned" && v) addAudit(updated, "REMS Patient Enrollment — HCP signature obtained on Patient Enrollment Form");
+    if (f === "remsPatientSigned" && v) addAudit(updated, "REMS Patient Enrollment — Patient signature obtained on Patient Enrollment Form");
+    if (f === "withMeEnrolled" && v) addAudit(updated, `Spravato withMe™ enrollment confirmed — Enrollment Date: ${updated.withMeEnrollmentDate || "not recorded"}`);
+    if (f === "withMeDeclined" && v) addAudit(updated, "Spravato withMe™ — Patient declined enrollment. Patient was counseled on available savings and support programs.");
     onUpdate(updated);
   };
   const isCommercial = patient.planType === "commercial";
@@ -2174,6 +2264,7 @@ function EnrollmentPanel({ patient, onUpdate, addAudit }) {
         <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
           <Field label="withMe Enrollment Date"><Input type="date" value={patient.withMeEnrollmentDate} onChange={v => upd("withMeEnrollmentDate", v)} /></Field>
           <Checkbox checked={patient.withMeEnrolled} onChange={v => upd("withMeEnrolled", v)} label="Patient enrolled in Spravato withMe™ program" />
+          <Checkbox checked={patient.withMeDeclined || false} onChange={v => upd("withMeDeclined", v)} label="Patient declined withMe enrollment (will be noted in audit trail)" />
         </div>
 
         <div style={{ marginBottom: 10 }}>
@@ -2608,7 +2699,7 @@ function PatientForm({ patient: initial, onSave, onCancel }) {
               <Field label="Diagnosis Date" required><Input type="date" value={p.diagnosisDate} onChange={v => update("diagnosisDate", v)} error={errs.diagnosisDate} /></Field>
             </div>
           </div>
-          <div style={S.card}><TrialEditor trials={p.trials || [emptyTrial(), emptyTrial()]} onChange={v => update("trials", v)} /></div>
+          <div style={S.card}><TrialEditor trials={p.trials || [emptyTrial(), emptyTrial()]} onChange={v => update("trials", v)} showErrors={attempted} /></div>
           <div style={S.card}>
             <div style={S.secTitle}>Additional Clinical History</div>
             <div style={{ display: "grid", gap: 16 }}>
@@ -2673,19 +2764,36 @@ function PatientForm({ patient: initial, onSave, onCancel }) {
       )}
 
       {/* Step 3 — PHQ-9 */}
-      {step === 3 && (
-        <div style={S.card}>
-          <div style={S.secTitle}>PHQ-9 Baseline Assessment</div>
-          {(p.phq9History || []).length === 0 ? (
-            <PHQ9Form assessment={emptyPHQ9()} onChange={a => update("phq9History", [{ ...a, score: a.answers.every(v => v !== null) ? a.answers.reduce((s, v) => s + v, 0) : null }])} />
-          ) : (
-            <div style={{ padding: "14px 18px", background: C.greenLight, borderRadius: 12, border: `2px solid ${C.green}30` }}>
-              <div style={{ fontWeight: 700, color: C.green, marginBottom: 4 }}>✓ PHQ-9 on file</div>
-              <div style={{ fontSize: 13, color: C.gray700 }}>{(p.phq9History || []).length} assessment(s) recorded.</div>
-            </div>
-          )}
-        </div>
-      )}
+      {step === 3 && (() => {
+        // Local PHQ9 state to prevent remount on each answer click
+        const [localPHQ9, setLocalPHQ9] = useState(() =>
+          (p.phq9History || []).length > 0 ? null : emptyPHQ9()
+        );
+        const saveLocalPHQ9 = () => {
+          if (!localPHQ9) return;
+          const score = localPHQ9.answers.every(v => v !== null) ? localPHQ9.answers.reduce((s, v) => s + v, 0) : null;
+          update("phq9History", [{ ...localPHQ9, score }]);
+          setLocalPHQ9(null);
+        };
+        return (
+          <div style={S.card}>
+            <div style={S.secTitle}>PHQ-9 Baseline Assessment</div>
+            {(p.phq9History || []).length > 0 ? (
+              <div style={{ padding: "14px 18px", background: C.greenLight, borderRadius: 12, border: `2px solid ${C.green}30` }}>
+                <div style={{ fontWeight: 700, color: C.green, marginBottom: 4 }}>✓ PHQ-9 on file</div>
+                <div style={{ fontSize: 13, color: C.gray700 }}>{(p.phq9History || []).length} assessment(s) recorded.</div>
+              </div>
+            ) : localPHQ9 ? (
+              <>
+                <PHQ9Form assessment={localPHQ9} onChange={setLocalPHQ9} />
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                  <button onClick={saveLocalPHQ9} style={S.btn("success")}>✓ Save Assessment</button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {/* Step 4 — Summary */}
       {step === 4 && (
@@ -2925,7 +3033,18 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
         {tab === "sessions" && <SessionTracker patient={patient} onUpdate={onUpdate} addAudit={addAudit} settings={settings} onSchedule={null} />}
         {tab === "pa" && <PATracker patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
         {tab === "phq9" && <PHQ9History patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
-        {tab === "billing" && <BillingModule patient={patient} session={(patient.sessions || []).slice(-1)[0]} settings={settings} onSave={onUpdate} />}
+        {tab === "billing" && (() => {
+          const lastSession = (patient.sessions || []).slice(-1)[0];
+          if (!lastSession) return (
+            <div style={{ ...S.card, textAlign: "center", padding: "48px 24px" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>💰</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.gray700, marginBottom: 8 }}>No Sessions Available for Billing</div>
+              <div style={{ fontSize: 13, color: C.gray500, marginBottom: 20 }}>Log a session first using the Sessions tab, then return here to add billing codes and generate a claim.</div>
+              <button onClick={() => setTab("sessions")} style={S.btn()}>Go to Sessions →</button>
+            </div>
+          );
+          return <BillingModule patient={patient} session={lastSession} settings={settings} onSave={onUpdate} />;
+        })()}
         {tab === "enrollment" && <EnrollmentPanel patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
         {tab === "shipments" && <ShipmentLog patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
         {tab === "notes" && <NotesTab patient={patient} onUpdate={onUpdate} />}
