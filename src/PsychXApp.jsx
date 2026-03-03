@@ -3058,41 +3058,40 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
     </div>
   );
 
-  return (
+   return (
     <div>
       {deleteConfirm && <ConfirmDeleteModal {...deleteConfirm} onCancel={() => setDeleteConfirm(null)} />}
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ width: 52, height: 52, borderRadius: 14, background: `linear-gradient(135deg,${C.teal},${C.tealDark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <span style={{ color: "#fff", fontWeight: 800, fontSize: 18 }}>{patient.firstName?.[0]}{patient.lastName?.[0]}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 14, background: `linear-gradient(135deg,${C.teal},${C.tealDark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <span style={{ color: "#fff", fontWeight: 800, fontSize: 18 }}>{patient.firstName?.[0]}{patient.lastName?.[0]}</span>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{patient.firstName} {patient.lastName}</div>
+          <div style={{ fontSize: 12, color: C.gray500, marginTop: 2 }}>
+            <span style={{ color: C.teal, fontWeight: 700 }}>{patient.psychxMRN}</span>
+            {patient.emrMRN && <span style={{ marginLeft: 10 }}>EMR: {patient.emrMRN}</span>}
+            <span style={{ marginLeft: 10 }}>DOB: {patient.dob}</span>
+            <span style={{ marginLeft: 10 }}>{patient.insurerName || "Insurance pending"}</span>
+            <span style={{ marginLeft: 10 }}>{patient.diagnosisCode}</span>
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 20, fontWeight: 800 }}>{patient.firstName} {patient.lastName}</div>
-            <div style={{ fontSize: 12, color: C.gray500, marginTop: 2 }}>
-              <span style={{ color: C.teal, fontWeight: 700 }}>{patient.psychxMRN}</span>
-              {patient.emrMRN && <span style={{ marginLeft: 10 }}>EMR: {patient.emrMRN}</span>}
-              <span style={{ marginLeft: 10 }}>DOB: {patient.dob}</span>
-              <span style={{ marginLeft: 10 }}>{patient.insurerName || "Insurance pending"}</span>
-              <span style={{ marginLeft: 10 }}>{patient.diagnosisCode}</span>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 360 }}>
-            {hasContra && <span style={S.badge("red")}>⛔ Contraindicated</span>}
-            {!hasSSRISNRI && (patient.trials || []).some(t => t.drug) && <span style={S.badge("amber")}>⚠ No SSRI/SNRI</span>}
-            {sev && <span style={{ ...S.badge(""), background: sev.bg, color: sev.color }}>PHQ-9: {latest.score} — {sev.label}</span>}
-            {activePA ? <span style={S.badge("green")}>Auth Active ✓</span> : <span style={S.badge("amber")}>No Active Auth</span>}
-            {remsUnsent > 0 && <span style={S.badge("amber")}>{remsUnsent} REMS ⚠</span>}
-            {patient.remsEnrolled && <span style={S.badge("green")}>REMS ✓</span>}
-            {patient.withMeEnrolled && <span style={S.badge("green")}>withMe ✓</span>}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
-            <button onClick={() => setEditing(true)} style={S.btn("ghost")}>Edit</button>
-            <button onClick={() => setDeleteConfirm({
-              title: "Delete Patient Record",
-              description: `You are about to permanently delete the entire patient record for ${patient.firstName} ${patient.lastName}. This will remove all sessions, PA records, PHQ-9 assessments, notes, and billing history.`,
-              detail: `PATIENT: ${patient.firstName} ${patient.lastName} · MRN: ${patient.psychxMRN} · Sessions: ${(patient.sessions || []).length} · PAs: ${(patient.paRecords || []).length}`,
-              onConfirm: () => { onDelete(); setDeleteConfirm(null); }
-            })} style={S.btn("danger")}>Delete Patient</button>
-          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 360 }}>
+          {hasContra && <span style={S.badge("red")}>⛔ Contraindicated</span>}
+          {!hasSSRISNRI && (patient.trials || []).some(t => t.drug) && <span style={S.badge("amber")}>⚠ No SSRI/SNRI</span>}
+          {sev && <span style={{ ...S.badge(""), background: sev.bg, color: sev.color }}>PHQ-9: {latest.score} — {sev.label}</span>}
+          {activePA ? <span style={S.badge("green")}>Auth Active ✓</span> : <span style={S.badge("amber")}>No Active Auth</span>}
+          {remsUnsent > 0 && <span style={S.badge("amber")}>{remsUnsent} REMS ⚠</span>}
+          {patient.remsEnrolled && <span style={S.badge("green")}>REMS ✓</span>}
+          {patient.withMeEnrolled && <span style={S.badge("green")}>withMe ✓</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
+          <button onClick={() => setEditing(true)} style={S.btn("ghost")}>Edit</button>
+          <button onClick={() => setDeleteConfirm({
+            title: "Delete Patient Record",
+            description: `You are about to permanently delete the entire patient record for ${patient.firstName} ${patient.lastName}. This will remove all sessions, PA records, PHQ-9 assessments, notes, and billing history.`,
+            detail: `PATIENT: ${patient.firstName} ${patient.lastName} · MRN: ${patient.psychxMRN} · Sessions: ${(patient.sessions || []).length} · PAs: ${(patient.paRecords || []).length}`,
+            onConfirm: () => { onDelete(); setDeleteConfirm(null); }
+          })} style={S.btn("danger")}>Delete Patient</button>
         </div>
       </div>
 
