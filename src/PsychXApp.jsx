@@ -308,19 +308,20 @@ function timeToMins(t) {
   if (ampm === "AM" && h === 12) h = 0;
   return h * 60 + m;
 }
-function autoSuggestCodes(session, isMedicare) {
+function autoSuggestCodes(session, isMedicare, settings) {
   const dose = session?.dose || "56mg";
   const mgNum = parseInt(dose);
   const drugUnits = mgNum;
+  const fee = (code) => settings?.[`charge_${code}`] || "";
   const lines = [];
   // Drug
-  lines.push({ code: "J0013", desc: "Esketamine, nasal spray, 1mg (buy-and-bill)", units: drugUnits, modifier: "", diagRef: "A", fee: "", type: "drug" });
+  lines.push({ code: "J0013", desc: "Esketamine, nasal spray, 1mg (buy-and-bill)", units: drugUnits, modifier: "", diagRef: "A", fee: fee("J0013"), type: "drug" });
   // E&M default 99214
-  lines.push({ code: "99214", desc: "Office visit, established patient — moderate complexity", units: 1, modifier: "25", diagRef: "A", fee: "", type: "em" });
+  lines.push({ code: "99214", desc: "Office visit, established patient — moderate complexity", units: 1, modifier: "25", diagRef: "A", fee: fee("99214"), type: "em" });
   // Prolonged/monitoring
-  lines.push({ code: "99415", desc: "Clinical staff monitoring, first hour beyond E/M (REMS 2hr)", units: 1, modifier: "", diagRef: "A", fee: "", type: "prolonged" });
-  lines.push({ code: "99416", desc: "Clinical staff monitoring, additional 30 min", units: 1, modifier: "", diagRef: "A", fee: "", type: "prolonged" });
-  lines.push({ code: isMedicare ? "G2212" : "99417", desc: isMedicare ? "Prolonged visit, Medicare, per 15 min" : "Prolonged office visit, per additional 15 min", units: 2, modifier: "", diagRef: "A", fee: "", type: "prolonged" });
+  lines.push({ code: "99415", desc: "Clinical staff monitoring, first hour beyond E/M (REMS 2hr)", units: 1, modifier: "", diagRef: "A", fee: fee("99415"), type: "prolonged" });
+  lines.push({ code: "99416", desc: "Clinical staff monitoring, additional 30 min", units: 1, modifier: "", diagRef: "A", fee: fee("99416"), type: "prolonged" });
+  lines.push({ code: isMedicare ? "G2212" : "99417", desc: isMedicare ? "Prolonged visit, Medicare, per 15 min" : "Prolonged office visit, per additional 15 min", units: 2, modifier: "", diagRef: "A", fee: fee(isMedicare ? "G2212" : "99417"), type: "prolonged" });
   return lines;
 }
 
@@ -463,6 +464,35 @@ function stepErrors(p, step) {
 }
 
 // ── UI Primitives ──────────────────────────────────────────────────────────
+// ── Confirm Delete Modal ───────────────────────────────────────────────────
+function ConfirmDeleteModal({ title, description, detail, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 28, maxWidth: 440, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
+          <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 20 }}>🗑️</div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.gray900, marginBottom: 4 }}>{title || "Confirm Deletion"}</div>
+            <div style={{ fontSize: 13, color: C.gray600, lineHeight: 1.5 }}>{description || "This action cannot be undone. A deletion record will be saved to the audit trail."}</div>
+          </div>
+        </div>
+        {detail && (
+          <div style={{ padding: "10px 14px", background: "#fef2f2", borderRadius: 9, border: "1px solid #fecaca", marginBottom: 18, fontSize: 12, color: "#7f1d1d", fontFamily: "monospace", wordBreak: "break-word" }}>
+            {detail}
+          </div>
+        )}
+        <div style={{ padding: "8px 12px", background: C.amberLight, borderRadius: 8, fontSize: 12, color: "#92400e", marginBottom: 18 }}>
+          ⚠ A timestamped deletion record will be permanently added to this patient's audit trail.
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onCancel} style={S.btn("ghost")}>Cancel — Keep Record</button>
+          <button onClick={onConfirm} style={{ ...S.btn("danger"), fontWeight: 700 }}>Yes, Delete Permanently</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Input({ value, onChange, placeholder, type = "text", style = {}, disabled, error, readOnly }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -756,7 +786,38 @@ function PHQ9Form({ assessment, onChange }) {
   );
 }
 
-function PHQ9History({ patient, onUpdate, addAudit }) {
+// Proper component for step 3 PHQ9 — avoids hooks-in-IIFE (React #310)
+function PHQ9Step({ p, update }) {
+  const [localPHQ9, setLocalPHQ9] = useState(() =>
+    (p.phq9History || []).length > 0 ? null : emptyPHQ9()
+  );
+  const saveLocalPHQ9 = () => {
+    if (!localPHQ9) return;
+    const score = localPHQ9.answers.every(v => v !== null) ? localPHQ9.answers.reduce((s, v) => s + v, 0) : null;
+    update("phq9History", [{ ...localPHQ9, score }]);
+    setLocalPHQ9(null);
+  };
+  return (
+    <div style={S.card}>
+      <div style={S.secTitle}>PHQ-9 Baseline Assessment</div>
+      {(p.phq9History || []).length > 0 ? (
+        <div style={{ padding: "14px 18px", background: C.greenLight, borderRadius: 12, border: `2px solid ${C.green}30` }}>
+          <div style={{ fontWeight: 700, color: C.green, marginBottom: 4 }}>✓ PHQ-9 on file</div>
+          <div style={{ fontSize: 13, color: C.gray700 }}>{(p.phq9History || []).length} assessment(s) recorded.</div>
+        </div>
+      ) : localPHQ9 ? (
+        <>
+          <PHQ9Form assessment={localPHQ9} onChange={setLocalPHQ9} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+            <button onClick={saveLocalPHQ9} style={S.btn("success")}>✓ Save Assessment</button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function PHQ9History({ patient, onUpdate, addAudit, confirmDelete }) {
   const [adding, setAdding] = useState(false);
   const [current, setCurrent] = useState(null);
   const history = [...(patient.phq9History || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -828,7 +889,16 @@ function PHQ9History({ patient, onUpdate, addAudit }) {
                 <div style={{ fontSize: 12, color: C.gray500 }}>{sev ? sev.label : "Incomplete"}{a.answers?.[8] > 0 ? " · ⚠ Q9 Positive" : ""}</div>
               </div>
               {sev && <span style={{ ...S.badge(""), background: sev.bg, color: sev.color }}>{sev.label}</span>}
-              <button onClick={() => { if (window.confirm("Delete?")) onUpdate({ ...patient, phq9History: patient.phq9History.filter(x => x.id !== a.id) }); }} style={{ ...S.btn("danger"), padding: "4px 10px", fontSize: 11 }}>✕</button>
+              <button onClick={() => confirmDelete && confirmDelete({
+                title: "Delete PHQ-9 Assessment",
+                description: `Delete the PHQ-9 dated ${a.date} with score ${a.score ?? "incomplete"}?`,
+                detail: `PHQ-9 Date: ${a.date} · Score: ${a.score ?? "incomplete"} · Questions answered: ${a.answers.filter(v => v !== null).length}/9`,
+                onConfirm: () => {
+                  const updated = { ...patient, phq9History: patient.phq9History.filter(x => x.id !== a.id) };
+                  addAudit(updated, `DELETED INFORMATION — PHQ-9 assessment · Date: ${a.date} · Score was: ${a.score ?? "incomplete"}`);
+                  onUpdate(updated);
+                }
+              })} style={{ ...S.btn("danger"), padding: "4px 10px", fontSize: 11 }}>✕</button>
             </div>
           );
         })}
@@ -893,7 +963,7 @@ function TrialEditor({ trials, onChange, showErrors = false }) {
               {trial.drugClass && <span style={{ ...S.badge(""), background: `${classColor[trial.drugClass] || C.gray500}18`, color: classColor[trial.drugClass] || C.gray500, fontSize: 10 }}>{trial.drugClass}</span>}
               {(trial.drugClass === "SSRI" || trial.drugClass === "SNRI") && <span style={S.badge("green")}>✓ PA Qualifies</span>}
             </div>
-            {trials.length > 2 && <button onClick={() => onChange(trials.filter((_, i) => i !== idx))} style={{ ...S.btn("danger"), padding: "3px 9px", fontSize: 11 }}>Remove</button>}
+            {trials.length > 2 && <button onClick={() => { if (window.confirm(`Remove Trial ${idx + 1} (${trial.drug || "no drug selected"})? This cannot be undone.`)) onChange(trials.filter((_, i) => i !== idx)); }} style={{ ...S.btn("danger"), padding: "3px 9px", fontSize: 11 }}>Remove</button>}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: 8 }}>
             <Field label="Medication" required={idx < 2}>
@@ -980,7 +1050,7 @@ function BillingModule({ session, patient, settings, onSave }) {
   const isMedicare = patient?.planType === "medicare";
   const [lines, setLines] = useState(() => {
     if (session.billingLines?.length > 0) return session.billingLines;
-    return autoSuggestCodes(session, isMedicare);
+    return autoSuggestCodes(session, isMedicare, settings);
   });
   const [diagCodes, setDiagCodes] = useState(session.billingDiagCodes?.length > 0 ? session.billingDiagCodes : [patient?.diagnosisCode || "F33.2"].filter(Boolean));
   const [billingNotes, setBillingNotes] = useState(session.billingNotes || "");
@@ -1092,10 +1162,17 @@ function BillingModule({ session, patient, settings, onSave }) {
         <div style={{ marginTop: 12, borderTop: `1px solid ${C.gray100}`, paddingTop: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.gray700, marginBottom: 8 }}>Add Codes</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            {[...EM_CODES, ...(isMedicare ? PROLONGED_CODES_MEDICARE : PROLONGED_CODES_COMMERCIAL), ...PSYCH_ADDON_CODES, { code: "G2082", desc: "Bundled ≤56mg", type: "drug_bundle" }, { code: "G2083", desc: "Bundled >56mg", type: "drug_bundle" }].map(c => (
-              <button key={c.code} onClick={() => setLines(prev => [...prev, { code: c.code, desc: c.desc, units: c.units || 1, modifier: "", diagRef: "A", fee: "", type: c.type }])}
-                style={{ ...S.btn("secondary"), fontSize: 11, padding: "4px 10px" }}>{c.code}</button>
-            ))}
+            {[...EM_CODES, ...(isMedicare ? PROLONGED_CODES_MEDICARE : PROLONGED_CODES_COMMERCIAL), ...PSYCH_ADDON_CODES, { code: "G2082", desc: "Bundled ≤56mg", type: "drug_bundle" }, { code: "G2083", desc: "Bundled >56mg", type: "drug_bundle" }].map(c => {
+              const chargeFee = settings?.[`charge_${c.code}`] || "";
+              return (
+                <button key={c.code}
+                  onClick={() => setLines(prev => [...prev, { code: c.code, desc: c.desc, units: c.units || 1, modifier: "", diagRef: "A", fee: chargeFee, type: c.type }])}
+                  style={{ ...S.btn("secondary"), fontSize: 11, padding: "4px 10px" }}
+                  title={chargeFee ? `Charge: $${chargeFee}/unit` : "No fee set in charge master"}>
+                  {c.code}{chargeFee ? ` ($${chargeFee})` : ""}
+                </button>
+              );
+            })}
           </div>
           {showAddCode ? (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 60px 60px 80px", gap: 8, alignItems: "end" }}>
@@ -1614,6 +1691,130 @@ function SessionTracker({ patient, onUpdate, addAudit, settings, onSchedule }) {
   );
 }
 
+// ── Appointment Form Component (extracted to avoid hooks-in-IIFE error) ────
+function ApptForm({ draft, setDraft, patients, editAppt, closeForm, saveAppt, isConflict, sessionPhase }) {
+  const [ptSearch, setPtSearch] = useState("");
+  const selectedPt = patients.find(p => p.id === draft.patientId);
+  const filteredPts = ptSearch.trim()
+    ? patients.filter(p =>
+        `${p.lastName} ${p.firstName}`.toLowerCase().includes(ptSearch.toLowerCase()) ||
+        p.psychxMRN?.toLowerCase().includes(ptSearch.toLowerCase()))
+    : patients;
+  const ptSessions = selectedPt
+    ? [...(selectedPt.sessions || [])].sort((a, b) => a.sessionNumber - b.sessionNumber)
+    : [];
+
+  return (
+    <div style={{ ...S.card, border: `2px solid ${C.teal}`, marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.teal, marginBottom: 14 }}>
+        {editAppt ? "Edit Appointment" : "Book New Appointment"}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+        {/* Patient search */}
+        <div>
+          <FL label="Patient" required />
+          <input
+            value={ptSearch || (selectedPt ? `${selectedPt.lastName}, ${selectedPt.firstName}` : "")}
+            onChange={e => {
+              setPtSearch(e.target.value);
+              if (!e.target.value) setDraft(d => ({ ...d, patientId: "", patientName: "" }));
+            }}
+            placeholder="Type last name to search..."
+            style={{ ...S.inp(false), marginBottom: 4 }}
+          />
+          {ptSearch && (
+            <div style={{ border: `1px solid ${C.gray200}`, borderRadius: 8, background: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: 180, overflowY: "auto", zIndex: 50, position: "relative" }}>
+              {filteredPts.length === 0
+                ? <div style={{ padding: "10px 14px", fontSize: 12, color: C.gray400 }}>No patients match "{ptSearch}"</div>
+                : filteredPts.map(p => (
+                  <div key={p.id}
+                    onClick={() => { setDraft(d => ({ ...d, patientId: p.id, patientName: `${p.firstName} ${p.lastName}` })); setPtSearch(""); }}
+                    style={{ padding: "9px 14px", cursor: "pointer", borderBottom: `1px solid ${C.gray100}`, fontSize: 13 }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.tealLight}
+                    onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                    <div style={{ fontWeight: 600 }}>{p.lastName}, {p.firstName}</div>
+                    <div style={{ fontSize: 11, color: C.gray400 }}>{p.psychxMRN} · {p.insurerName || "No insurer"} · {(p.sessions || []).length} sessions</div>
+                  </div>
+                ))}
+            </div>
+          )}
+          {/* Session history panel */}
+          {selectedPt && !ptSearch && (
+            <div style={{ marginTop: 8, padding: "10px 12px", background: C.tealLight, borderRadius: 9, border: `1px solid #bae6fd` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.teal, textTransform: "uppercase", marginBottom: 6 }}>
+                {selectedPt.firstName} {selectedPt.lastName} · Session History
+              </div>
+              {ptSessions.length === 0
+                ? <div style={{ fontSize: 12, color: C.gray400 }}>No sessions logged yet</div>
+                : <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {ptSessions.map(s => (
+                      <div key={s.id} style={{ padding: "3px 9px", background: "#fff", borderRadius: 20, border: `1px solid #bae6fd`, fontSize: 11, color: C.teal }}>
+                        <strong>#{s.sessionNumber}</strong> — {s.date} · {s.dose}
+                      </div>
+                    ))}
+                  </div>}
+              <div style={{ fontSize: 11, color: C.gray500, marginTop: 6 }}>
+                Next: Session #{ptSessions.length + 1} · {sessionPhase(ptSessions.length + 1).label}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Date */}
+        <div>
+          <FL label="Date" required />
+          <input type="date" value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))} style={S.inp(false)} />
+        </div>
+        {/* Time */}
+        <div>
+          <FL label="Time" required />
+          <select value={draft.time} onChange={e => setDraft(d => ({ ...d, time: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
+            {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        {/* Chair */}
+        <div>
+          <FL label="Chair" required />
+          <select value={draft.chair} onChange={e => setDraft(d => ({ ...d, chair: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
+            <option value="1">Chair 1</option>
+            <option value="2">Chair 2</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <FL label="Appointment Type" />
+          <select value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
+            {APPOINTMENT_TYPES.map(t => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <FL label="Duration (min)" />
+          <select value={draft.duration} onChange={e => setDraft(d => ({ ...d, duration: parseInt(e.target.value) }))} style={{ ...S.inp(false), appearance: "none" }}>
+            {SESSION_DURATION_MINS.map(m => <option key={m} value={m}>{m} min</option>)}
+          </select>
+        </div>
+        <div>
+          <FL label="Session # (if Spravato)" />
+          <input type="number" value={draft.sessionNumber || ""} onChange={e => setDraft(d => ({ ...d, sessionNumber: e.target.value ? parseInt(e.target.value) : null }))} placeholder="e.g. 4" style={S.inp(false)} />
+        </div>
+      </div>
+      <div>
+        <FL label="Notes" />
+        <input value={draft.notes || ""} onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))} placeholder="Transportation confirmed, fasting, etc." style={S.inp(false)} />
+      </div>
+      {isConflict(draft, editAppt) && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: C.redLight, borderRadius: 8, fontSize: 12, color: C.red, fontWeight: 700 }}>
+          ⛔ Chair {draft.chair} is already booked during this time slot. Select a different time or chair.
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+        <button onClick={closeForm} style={S.btn("ghost")}>Cancel</button>
+        <button onClick={saveAppt} style={S.btn("success")}>✓ {editAppt ? "Update" : "Book"} Appointment</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Scheduling Module ──────────────────────────────────────────────────────
 function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdate }) {
   const [weekRef, setWeekRef] = useState(new Date().toISOString().split("T")[0]);
@@ -1665,9 +1866,16 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
     onScheduleUpdate(updated); closeForm();
   };
 
-  const deleteAppt = id => {
-    if (!window.confirm("Delete this appointment?")) return;
-    onScheduleUpdate(schedule.filter(a => a.id !== id));
+  const [apptDeleteConfirm, setApptDeleteConfirm] = useState(null);
+
+  const deleteAppt = (id) => {
+    const appt = schedule.find(a => a.id === id);
+    setApptDeleteConfirm({
+      title: "Delete Appointment",
+      description: `Delete this appointment for ${appt?.patientName || "this patient"} on ${appt?.date} at ${appt?.time}?`,
+      detail: `Patient: ${appt?.patientName || "N/A"} · Date: ${appt?.date} · Time: ${appt?.time} · Chair: ${appt?.chair} · Type: ${appt?.type}`,
+      onConfirm: () => { onScheduleUpdate(schedule.filter(a => a.id !== id)); setApptDeleteConfirm(null); }
+    });
   };
 
   const convertToSession = (appt) => {
@@ -1689,7 +1897,7 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+      {apptDeleteConfirm && <ConfirmDeleteModal {...apptDeleteConfirm} onCancel={() => setApptDeleteConfirm(null)} />}
         <div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>Schedule</div>
           <div style={{ fontSize: 12, color: C.gray500 }}>{schedule.filter(a => !a.converted).length} upcoming appointments · 2 chairs</div>
@@ -1701,116 +1909,13 @@ function SchedulingModule({ patients, schedule, onScheduleUpdate, onPatientUpdat
       </div>
 
       {/* Appointment Form */}
-      {showForm && draft && (() => {
-        const [ptSearch, setPtSearch] = useState("");
-        const selectedPt = patients.find(p => p.id === draft.patientId);
-        const filteredPts = ptSearch.trim()
-          ? patients.filter(p => `${p.lastName} ${p.firstName}`.toLowerCase().includes(ptSearch.toLowerCase()) || p.psychxMRN?.toLowerCase().includes(ptSearch.toLowerCase()))
-          : patients;
-        const ptSessions = selectedPt ? [...(selectedPt.sessions || [])].sort((a, b) => a.sessionNumber - b.sessionNumber) : [];
-
-        return (
-        <div style={{ ...S.card, border: `2px solid ${C.teal}`, marginBottom: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.teal, marginBottom: 14 }}>{editAppt ? "Edit Appointment" : "Book New Appointment"}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div>
-              <FL label="Patient" required />
-              <input
-                value={ptSearch || (selectedPt ? `${selectedPt.lastName}, ${selectedPt.firstName}` : "")}
-                onChange={e => { setPtSearch(e.target.value); if (!e.target.value) setDraft(d => ({ ...d, patientId: "", patientName: "" })); }}
-                placeholder="Type last name to search..."
-                style={{ ...S.inp(false), marginBottom: 4 }}
-              />
-              {ptSearch && (
-                <div style={{ border: `1px solid ${C.gray200}`, borderRadius: 8, background: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: 180, overflowY: "auto", zIndex: 10, position: "relative" }}>
-                  {filteredPts.length === 0
-                    ? <div style={{ padding: "10px 14px", fontSize: 12, color: C.gray400 }}>No patients match "{ptSearch}"</div>
-                    : filteredPts.map(p => (
-                      <div key={p.id} onClick={() => { setDraft(d => ({ ...d, patientId: p.id, patientName: `${p.firstName} ${p.lastName}` })); setPtSearch(""); }}
-                        style={{ padding: "9px 14px", cursor: "pointer", borderBottom: `1px solid ${C.gray100}`, fontSize: 13 }}
-                        onMouseEnter={e => e.currentTarget.style.background = C.tealLight}
-                        onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
-                        <div style={{ fontWeight: 600 }}>{p.lastName}, {p.firstName}</div>
-                        <div style={{ fontSize: 11, color: C.gray400 }}>{p.psychxMRN} · {p.insurerName || "No insurer"} · {(p.sessions || []).length} sessions</div>
-                      </div>
-                    ))}
-                </div>
-              )}
-              {/* Session history below selected patient */}
-              {selectedPt && !ptSearch && (
-                <div style={{ marginTop: 8, padding: "10px 12px", background: C.tealLight, borderRadius: 9, border: `1px solid #bae6fd` }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: C.teal, textTransform: "uppercase", marginBottom: 6 }}>
-                    {selectedPt.firstName} {selectedPt.lastName} · Session History
-                  </div>
-                  {ptSessions.length === 0 ? (
-                    <div style={{ fontSize: 12, color: C.gray400 }}>No sessions logged yet</div>
-                  ) : (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                      {ptSessions.map(s => (
-                        <div key={s.id} style={{ padding: "3px 9px", background: "#fff", borderRadius: 20, border: `1px solid #bae6fd`, fontSize: 11, color: C.teal }}>
-                          <strong>#{s.sessionNumber}</strong> — {s.date} · {s.dose}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 11, color: C.gray500, marginTop: 6 }}>
-                    Next will be Session #{ptSessions.length + 1} · {sessionPhase(ptSessions.length + 1).label}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div>
-              <FL label="Date" required />
-              <input type="date" value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))} style={S.inp(false)} />
-            </div>
-            <div>
-              <FL label="Time" required />
-              <select value={draft.time} onChange={e => setDraft(d => ({ ...d, time: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
-                {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <FL label="Chair" required />
-              <select value={draft.chair} onChange={e => setDraft(d => ({ ...d, chair: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
-                <option value="1">Chair 1</option>
-                <option value="2">Chair 2</option>
-              </select>
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div>
-              <FL label="Appointment Type" />
-              <select value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value }))} style={{ ...S.inp(false), appearance: "none" }}>
-                {APPOINTMENT_TYPES.map(t => <option key={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <FL label="Duration (min)" />
-              <select value={draft.duration} onChange={e => setDraft(d => ({ ...d, duration: parseInt(e.target.value) }))} style={{ ...S.inp(false), appearance: "none" }}>
-                {SESSION_DURATION_MINS.map(m => <option key={m} value={m}>{m} min</option>)}
-              </select>
-            </div>
-            <div>
-              <FL label="Session # (if Spravato)" />
-              <input type="number" value={draft.sessionNumber || ""} onChange={e => setDraft(d => ({ ...d, sessionNumber: e.target.value ? parseInt(e.target.value) : null }))} placeholder="e.g. 4" style={S.inp(false)} />
-            </div>
-          </div>
-          <div>
-            <FL label="Notes" />
-            <input value={draft.notes || ""} onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))} placeholder="Transportation confirmed, fasting, etc." style={S.inp(false)} />
-          </div>
-          {isConflict(draft, editAppt) && (
-            <div style={{ marginTop: 10, padding: "8px 12px", background: C.redLight, borderRadius: 8, fontSize: 12, color: C.red, fontWeight: 700 }}>
-              ⛔ Chair {draft.chair} is already booked during this time slot. Select a different time or chair.
-            </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-            <button onClick={closeForm} style={S.btn("ghost")}>Cancel</button>
-            <button onClick={saveAppt} style={S.btn("success")}>✓ {editAppt ? "Update" : "Book"} Appointment</button>
-          </div>
-        </div>
-        );
-      })()}
+      {showForm && draft && (
+        <ApptForm
+          draft={draft} setDraft={setDraft} patients={patients}
+          editAppt={editAppt} closeForm={closeForm} saveAppt={saveAppt}
+          isConflict={isConflict} sessionPhase={sessionPhase}
+        />
+      )}
 
       {/* Week Calendar View */}
       {view === "week" && (
@@ -1982,6 +2087,86 @@ function PracticeSettings({ settings, onSave }) {
         </div>
       </div>
 
+      {/* ── Charge Master ──────────────────────────────────────────────── */}
+      <div style={{ ...S.card }}>
+        <div style={S.secTitle}>Charge Master — Procedure Fee Schedule</div>
+        <div style={{ fontSize: 13, color: C.gray500, marginBottom: 14 }}>
+          Enter your practice's charge (fee) for 1 unit of each code. The billing screen will auto-calculate the total charge (units × fee) when a code is selected.
+        </div>
+
+        {(() => {
+          const ALL_CODES = [
+            { section: "Drug Codes (HCPCS)", codes: DRUG_CODES },
+            { section: "E/M Codes (CPT)", codes: EM_CODES },
+            { section: "Prolonged Service — Commercial (CPT)", codes: PROLONGED_CODES_COMMERCIAL },
+            { section: "Prolonged Service — Medicare (HCPCS)", codes: PROLONGED_CODES_MEDICARE },
+            { section: "Psychotherapy Add-ons (CPT)", codes: PSYCH_ADDON_CODES },
+            { section: "Additional Codes", codes: [
+              { code: "90837", desc: "Individual psychotherapy, 60 min", type: "psych" },
+              { code: "90834", desc: "Individual psychotherapy, 45 min", type: "psych" },
+              { code: "90832", desc: "Individual psychotherapy, 30 min", type: "psych" },
+              { code: "90839", desc: "Psychotherapy for crisis — first 60 min", type: "crisis" },
+              { code: "96127", desc: "Brief emotional/behavioral assessment (PHQ-9)", type: "assessment" },
+            ]}
+          ];
+
+          return ALL_CODES.map(({ section, codes }) => (
+            <div key={section} style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", marginBottom: 10, paddingBottom: 4, borderBottom: `2px solid ${C.teal}30` }}>
+                {section}
+              </div>
+              <div style={{ display: "grid", gap: 0 }}>
+                {/* Header */}
+                <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 100px 110px", gap: 8, padding: "6px 10px", background: C.gray50, borderRadius: "8px 8px 0 0", fontSize: 11, fontWeight: 700, color: C.gray500, textTransform: "uppercase" }}>
+                  <div>Code</div><div>Description</div><div style={{ textAlign: "right" }}>$/Unit</div><div style={{ textAlign: "right" }}>Typical Units</div>
+                </div>
+                {codes.map((c, ci) => {
+                  const chargeKey = `charge_${c.code}`;
+                  const fee = parseFloat(form[chargeKey] || 0);
+                  const typicalUnits = c.units || (c.code === "J0013" ? 56 : 1);
+                  const calcTotal = fee && typicalUnits ? (fee * typicalUnits).toFixed(2) : null;
+                  return (
+                    <div key={c.code} style={{ display: "grid", gridTemplateColumns: "90px 1fr 100px 110px", gap: 8, padding: "9px 10px", background: ci % 2 === 0 ? "#fff" : C.gray50, borderBottom: `1px solid ${C.gray100}`, alignItems: "center" }}>
+                      <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13, color: C.gray900 }}>{c.code}</div>
+                      <div>
+                        <div style={{ fontSize: 12, color: C.gray700 }}>{c.desc}</div>
+                        {c.unitNote && <div style={{ fontSize: 10, color: C.gray400, marginTop: 1 }}>{c.unitNote}</div>}
+                      </div>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                          <span style={{ fontSize: 13, color: C.gray500 }}>$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={form[chargeKey] || ""}
+                            onChange={e => upd(chargeKey, e.target.value)}
+                            placeholder="0.00"
+                            style={{ ...S.inp(false), width: 72, textAlign: "right", fontFamily: "monospace", fontSize: 13 }}
+                          />
+                        </div>
+                        {calcTotal && (
+                          <div style={{ fontSize: 10, color: C.teal, textAlign: "right", marginTop: 3, fontWeight: 700 }}>
+                            ×{typicalUnits} = ${calcTotal}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: "right", fontSize: 12, color: C.gray500 }}>
+                        {c.code === "J0013" ? "56–84 units" : c.units ? `${c.units} unit${c.units !== 1 ? "s" : ""}` : "1 unit"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ));
+        })()}
+
+        <div style={{ padding: "10px 14px", background: C.tealLight, borderRadius: 9, border: `1px solid #bae6fd`, fontSize: 12, color: "#0369a1" }}>
+          💡 Fees entered here auto-populate the billing screen when a code is selected. J0013 fee is per mg — e.g., if you charge $15/mg, a 56mg session generates $840 (56 × $15). Save settings to apply.
+        </div>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <button onClick={save} style={S.btn("success")}>✓ Save Practice Settings</button>
       </div>
@@ -1990,7 +2175,7 @@ function PracticeSettings({ settings, onSave }) {
 }
 
 // ── PA Tracker ─────────────────────────────────────────────────────────────
-function PATracker({ patient, onUpdate, addAudit }) {
+function PATracker({ patient, onUpdate, addAudit, confirmDelete }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -2111,7 +2296,16 @@ function PATracker({ patient, onUpdate, addAudit }) {
                   {r.denialReason && <div style={{ marginTop: 8, padding: "7px 10px", background: C.redLight, borderRadius: 7, fontSize: 12, color: C.red }}><strong>Denial:</strong> {r.denialReason}{r.appealNotes ? ` · Appeal: ${r.appealNotes}` : ""}</div>}
                   {r.notes && <div style={{ marginTop: 6, fontSize: 12, color: C.gray700 }}><strong>Notes:</strong> {r.notes}</div>}
                   <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                    <button onClick={() => { if (window.confirm("Delete?")) { const u = { ...patient, paRecords: patient.paRecords.filter(x => x.id !== r.id) }; onUpdate(u); } }} style={S.btn("danger")}>Delete Record</button>
+                    <button onClick={() => confirmDelete && confirmDelete({
+                      title: "Delete PA Record",
+                      description: `Delete this PA record from ${r.payer}?`,
+                      detail: `Payer: ${r.payer} · Status: ${r.status} · Auth #: ${r.authNumber || "N/A"} · Submitted: ${r.submittedDate || "N/A"}`,
+                      onConfirm: () => {
+                        const u = { ...patient, paRecords: patient.paRecords.filter(x => x.id !== r.id) };
+                        addAudit(u, `DELETED INFORMATION — PA Record removed · Payer: ${r.payer} · Status was: ${r.status} · Auth #: ${r.authNumber || "N/A"}`);
+                        onUpdate(u);
+                      }
+                    })} style={S.btn("danger")}>Delete Record</button>
                   </div>
                 </div>
               )}
@@ -2123,7 +2317,7 @@ function PATracker({ patient, onUpdate, addAudit }) {
 }
 
 // ── Shipment Log ───────────────────────────────────────────────────────────
-function ShipmentLog({ patient, onUpdate, addAudit }) {
+function ShipmentLog({ patient, onUpdate, addAudit, confirmDelete }) {
   const [adding, setAdding] = useState(false);
   const [ship, setShip] = useState(null);
   const upd = (f, v) => setShip(p => ({ ...p, [f]: v }));
@@ -2166,7 +2360,16 @@ function ShipmentLog({ patient, onUpdate, addAudit }) {
               <div style={{ fontWeight: 700, fontSize: 13 }}>{s.dose} · {s.devices} device{parseInt(s.devices) > 1 ? "s" : ""} — {s.receivedDate}</div>
               <div style={{ fontSize: 11, color: C.gray500 }}>{s.lotNumber ? `Lot: ${s.lotNumber} · ` : ""}{s.expirationDate ? `Exp: ${s.expirationDate}` : ""}{s.notes ? ` · ${s.notes}` : ""}</div>
             </div>
-            <button onClick={() => { if (window.confirm("Delete?")) onUpdate({ ...patient, shipments: patient.shipments.filter(x => x.id !== s.id) }); }} style={S.btn("danger")}>✕</button>
+            <button onClick={() => confirmDelete && confirmDelete({
+              title: "Delete Shipment Record",
+              description: `Delete this shipment record (Lot #${s.lot || "N/A"}, ${s.date})?`,
+              detail: `Shipment Date: ${s.date} · Lot #: ${s.lot || "N/A"} · Qty: ${s.qty || "N/A"} · Status: ${s.status || "N/A"}`,
+              onConfirm: () => {
+                const updated = { ...patient, shipments: patient.shipments.filter(x => x.id !== s.id) };
+                addAudit && addAudit(updated, `DELETED INFORMATION — Shipment record removed · Date: ${s.date} · Lot #: ${s.lot || "N/A"}`);
+                onUpdate(updated);
+              }
+            })} style={S.btn("danger")}>✕</button>
           </div>
         ))}
     </div>
@@ -2297,7 +2500,7 @@ function EnrollmentPanel({ patient, onUpdate, addAudit }) {
 }
 
 // ── Notes Tab ─────────────────────────────────────────────────────────────
-function NotesTab({ patient, onUpdate }) {
+function NotesTab({ patient, onUpdate, addAudit, confirmDelete }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState(null);
   const [filterType, setFilterType] = useState("all");
@@ -2370,7 +2573,16 @@ function NotesTab({ patient, onUpdate }) {
             <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
               <span style={S.badge(typeColor(n.type))}>{typeLabel(n.type)}</span>
               <div style={{ fontSize: 11, color: C.gray400, flex: 1 }}>{fmtDateTime(n.createdAt)}</div>
-              {n.type !== "system" && <button onClick={() => { if (window.confirm("Delete?")) onUpdate({ ...patient, notes: patient.notes.filter(x => x.id !== n.id) }); }} style={{ ...S.btn("danger"), padding: "2px 7px", fontSize: 11 }}>✕</button>}
+              {n.type !== "system" && <button onClick={() => confirmDelete && confirmDelete({
+                title: "Delete Note",
+                description: `Delete this note from ${n.date}?`,
+                detail: `Type: ${n.type} · Date: ${n.date} · Content: "${(n.text || n.content || "").substring(0, 120)}${(n.text || n.content || "").length > 120 ? "..." : ""}"`,
+                onConfirm: () => {
+                  const updated = { ...patient, notes: patient.notes.filter(x => x.id !== n.id) };
+                  const noteAudit = { ...patient, notes: [...(patient.notes || []).filter(x => x.id !== n.id), { id: `audit_${Date.now()}`, type: "system", date: new Date().toISOString().split("T")[0], timestamp: new Date().toISOString(), text: `DELETED INFORMATION — Note removed · Type: ${n.type} · Date: ${n.date} · Content: "${(n.text || n.content || "").substring(0, 200)}"` }] };
+                  onUpdate(noteAudit);
+                }
+              })} style={{ ...S.btn("danger"), padding: "2px 7px", fontSize: 11 }}>✕</button>}
             </div>
             <div style={{ fontSize: 13, color: C.gray700, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{n.text}</div>
             {n.attachmentName && (
@@ -2764,36 +2976,7 @@ function PatientForm({ patient: initial, onSave, onCancel }) {
       )}
 
       {/* Step 3 — PHQ-9 */}
-      {step === 3 && (() => {
-        // Local PHQ9 state to prevent remount on each answer click
-        const [localPHQ9, setLocalPHQ9] = useState(() =>
-          (p.phq9History || []).length > 0 ? null : emptyPHQ9()
-        );
-        const saveLocalPHQ9 = () => {
-          if (!localPHQ9) return;
-          const score = localPHQ9.answers.every(v => v !== null) ? localPHQ9.answers.reduce((s, v) => s + v, 0) : null;
-          update("phq9History", [{ ...localPHQ9, score }]);
-          setLocalPHQ9(null);
-        };
-        return (
-          <div style={S.card}>
-            <div style={S.secTitle}>PHQ-9 Baseline Assessment</div>
-            {(p.phq9History || []).length > 0 ? (
-              <div style={{ padding: "14px 18px", background: C.greenLight, borderRadius: 12, border: `2px solid ${C.green}30` }}>
-                <div style={{ fontWeight: 700, color: C.green, marginBottom: 4 }}>✓ PHQ-9 on file</div>
-                <div style={{ fontSize: 13, color: C.gray700 }}>{(p.phq9History || []).length} assessment(s) recorded.</div>
-              </div>
-            ) : localPHQ9 ? (
-              <>
-                <PHQ9Form assessment={localPHQ9} onChange={setLocalPHQ9} />
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                  <button onClick={saveLocalPHQ9} style={S.btn("success")}>✓ Save Assessment</button>
-                </div>
-              </>
-            ) : null}
-          </div>
-        );
-      })()}
+      {step === 3 && <PHQ9Step p={p} update={update} />}
 
       {/* Step 4 — Summary */}
       {step === 4 && (
@@ -2842,6 +3025,7 @@ function PatientForm({ patient: initial, onSave, onCancel }) {
 function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedule, onScheduleUpdate }) {
   const [tab, setTab] = useState("overview");
   const [editing, setEditing] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { title, description, detail, onConfirm }
 
   const phq9s = (patient.phq9History || []).sort((a, b) => new Date(b.date) - new Date(a.date));
   const latest = phq9s[0];
@@ -2853,7 +3037,7 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
   const allErrors = validatePatient(patient);
   const psych = PSYCHX_PSYCHIATRISTS.find(d => d.id === patient.psychiatristId);
 
-  const tabs = [
+  const confirmDelete = (opts) => setDeleteConfirm({ ...opts, onConfirm: () => { opts.onConfirm(); setDeleteConfirm(null); } });
     { id: "overview", label: "Overview" },
     { id: "sessions", label: `Sessions (${(patient.sessions || []).length})` },
     { id: "pa", label: `Prior Auth (${(patient.paRecords || []).length})` },
@@ -2874,7 +3058,7 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
 
   return (
     <div>
-      <div style={{ ...S.card, marginBottom: 18 }}>
+      {deleteConfirm && <ConfirmDeleteModal {...deleteConfirm} onCancel={() => setDeleteConfirm(null)} />}
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <div style={{ width: 52, height: 52, borderRadius: 14, background: `linear-gradient(135deg,${C.teal},${C.tealDark})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <span style={{ color: "#fff", fontWeight: 800, fontSize: 18 }}>{patient.firstName?.[0]}{patient.lastName?.[0]}</span>
@@ -2900,7 +3084,12 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
           </div>
           <div style={{ display: "flex", gap: 8, marginLeft: 8 }}>
             <button onClick={() => setEditing(true)} style={S.btn("ghost")}>Edit</button>
-            <button onClick={onDelete} style={S.btn("danger")}>Delete</button>
+            <button onClick={() => setDeleteConfirm({
+              title: "Delete Patient Record",
+              description: `You are about to permanently delete the entire patient record for ${patient.firstName} ${patient.lastName}. This will remove all sessions, PA records, PHQ-9 assessments, notes, and billing history.`,
+              detail: `PATIENT: ${patient.firstName} ${patient.lastName} · MRN: ${patient.psychxMRN} · Sessions: ${(patient.sessions || []).length} · PAs: ${(patient.paRecords || []).length}`,
+              onConfirm: () => { onDelete(); setDeleteConfirm(null); }
+            })} style={S.btn("danger")}>Delete Patient</button>
           </div>
         </div>
       </div>
@@ -3031,8 +3220,8 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
           </div>
         )}
         {tab === "sessions" && <SessionTracker patient={patient} onUpdate={onUpdate} addAudit={addAudit} settings={settings} onSchedule={null} />}
-        {tab === "pa" && <PATracker patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
-        {tab === "phq9" && <PHQ9History patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
+        {tab === "pa" && <PATracker patient={patient} onUpdate={onUpdate} addAudit={addAudit} confirmDelete={confirmDelete} />}
+        {tab === "phq9" && <PHQ9History patient={patient} onUpdate={onUpdate} addAudit={addAudit} confirmDelete={confirmDelete} />}
         {tab === "billing" && (() => {
           const lastSession = (patient.sessions || []).slice(-1)[0];
           if (!lastSession) return (
@@ -3046,8 +3235,8 @@ function PatientDetail({ patient, onUpdate, onDelete, addAudit, settings, schedu
           return <BillingModule patient={patient} session={lastSession} settings={settings} onSave={onUpdate} />;
         })()}
         {tab === "enrollment" && <EnrollmentPanel patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
-        {tab === "shipments" && <ShipmentLog patient={patient} onUpdate={onUpdate} addAudit={addAudit} />}
-        {tab === "notes" && <NotesTab patient={patient} onUpdate={onUpdate} />}
+        {tab === "shipments" && <ShipmentLog patient={patient} onUpdate={onUpdate} addAudit={addAudit} confirmDelete={confirmDelete} />}
+        {tab === "notes" && <NotesTab patient={patient} onUpdate={onUpdate} addAudit={addAudit} confirmDelete={confirmDelete} />}
         {tab === "exports" && <ExportPanel patient={patient} settings={settings} />}
       </ErrorBoundary>
     </div>
